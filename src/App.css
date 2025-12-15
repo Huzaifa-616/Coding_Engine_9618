@@ -1,0 +1,102 @@
+:root {
+  --bg-dark: #121212;
+  --bg-card: #1e1e1e;
+  --text-main: #ffffff;
+  --text-muted: #aaaaaa;
+  --accent-python: #4CAF50;
+  --accent-pseudo: #2196F3;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--bg-dark);
+  color: var(--text-main);
+  font-family: 'Inter', system-ui, Avenir, Helvetica, Arial, sans-serif;
+}
+
+/* Home Page Container */
+.home-container {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 40px 20px;
+  text-align: center;
+}
+
+.hero-section h1 {
+  font-size: 3.5rem;
+  margin-bottom: 10px;
+  background: linear-gradient(to right, #fff, #aaa);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.hero-section p {
+  font-size: 1.2rem;
+  color: var(--text-muted);
+  margin-bottom: 50px;
+}
+
+/* Grid for the Cards */
+.lab-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 30px;
+  padding: 20px;
+}
+
+/* The Card Styling */
+.lab-card {
+  background-color: var(--bg-card);
+  border: 1px solid #333;
+  border-radius: 12px;
+  padding: 30px;
+  text-align: left;
+  transition: transform 0.2s, border-color 0.2s;
+  cursor: pointer;
+  text-decoration: none;
+  color: white;
+  display: block;
+}
+
+.lab-card:hover {
+  transform: translateY(-5px);
+  border-color: #555;
+}
+
+.lab-card.python:hover {
+  border-color: var(--accent-python);
+  box-shadow: 0 4px 20px rgba(76, 175, 80, 0.2);
+}
+
+.lab-card.pseudo:hover {
+  border-color: var(--accent-pseudo);
+  box-shadow: 0 4px 20px rgba(33, 150, 243, 0.2);
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  margin-bottom: 15px;
+}
+
+.card-header h2 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.card-desc {
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+.status-badge {
+  display: inline-block;
+  font-size: 0.8rem;
+  padding: 4px 8px;
+  border-radius: 4px;
+  margin-top: 20px;
+  background: #333;
+  color: #ccc;
+}
