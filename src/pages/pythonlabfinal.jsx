@@ -35,7 +35,7 @@ const PythonLab = () => {
   const [currentStep, setCurrentStep] = useState(0);
   const [isVisualizerOpen, setIsVisualizerOpen] = useState(false);
 
-  // External Notes DB State
+  // External Notes DB State (Just like PastPaper Explorer!)
   const [notesDb, setNotesDb] = useState(null);
   const [expandedNotes, setExpandedNotes] = useState({});
 
@@ -68,7 +68,7 @@ const PythonLab = () => {
 
   const activeItem = items.find(i => i.id === activeFileId);
 
-  // --- 1. LOAD EXTERNAL NOTES DB ---
+  // --- 1. LOAD EXTERNAL NOTES DB (The App.jsx Method) ---
   useEffect(() => {
     fetch('/notes_db.json')
       .then(res => res.json())
@@ -455,6 +455,7 @@ const PythonLab = () => {
     ));
   };
 
+  // Fetches code from your public folder and inserts it into the Workspace
   const handleLoadNote = async (node) => {
     try {
         const res = await fetch(node.path);
@@ -514,23 +515,12 @@ const PythonLab = () => {
   if (!isLoaded) return <div style={{ height: '100vh', background: '#0f172a', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b' }}>Booting Workspace...</div>;
 
   return (
-    // THE FIX: Added width: '100vw' and overflow: 'hidden' to physically override Vite constraints
-    <div style={{ width: '100vw', height: '100vh', overflow: 'hidden', display: 'flex', flexDirection: 'column', backgroundColor: '#0f172a', color: '#cbd5e1', fontFamily: 'Inter, system-ui, sans-serif' }}>
+    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', backgroundColor: '#0f172a', color: '#cbd5e1', fontFamily: 'Inter, system-ui, sans-serif' }}>
       
       <input type="file" multiple accept=".py,.txt,.csv,.json" ref={fileInputRef} style={{ display: 'none' }} onChange={handleFileUpload} />
       {isDraggingVis && <div style={{ position: 'fixed', inset: 0, zIndex: 99999, cursor: 'col-resize' }} />}
 
       <style>{`
-        /* --- THE CSS FIX FOR THE BLACK SCREEN --- */
-        #root, body, html {
-            max-width: none !important;
-            padding: 0 !important;
-            margin: 0 !important;
-            width: 100vw !important;
-            height: 100vh !important;
-            overflow: hidden !important;
-        }
-
         .visualizer-line-highlight { background: rgba(139, 92, 246, 0.2); border-left: 3px solid #8b5cf6; }
         .visualizer-glyph { background: #8b5cf6; width: 6px !important; border-radius: 3px; margin-left: 2px;}
         .xterm .xterm-viewport { overflow-y: auto !important; }
@@ -558,7 +548,7 @@ const PythonLab = () => {
         </div>
 
         <div style={{ display: 'flex', gap: '12px' }}>
-            <button onClick={formatCode} disabled={!isPyodideReady} style={{ backgroundColor: '#1e293b', color: '#f8fafc', border: '1px solid #334155', padding: '8px 16px', borderRadius: '8px', cursor: 'pointer', fontWeight: '600', display: 'flex', gap: '8px', alignItems: 'center', fontSize: '13px', transition: 'all 0.2s' }} onMouseEnter={e=>{e.currentTarget.style.borderColor='#475569'; e.currentTarget.style.background='#334155'}} onMouseLeave={e=>{e.currentTarget.style.borderColor='#334155'; e.currentTarget.style.background='#1e293b'}}>
+            <button onClick={formatCode} disabled={!isPyodideReady} style={{ backgroundColor: '#1e293b', color: '#f8fafc', border: '1px solid #334155', padding: '8px 16px', borderRadius: '8px', cursor: 'pointer', fontWeight: '600', display: 'flex', gap: '8px', alignItems: 'center', fontSize: '13px', transition: 'all 0.2s' }}>
                 <AlignLeft size={16} /> Format
             </button>
             <button onClick={runCode} disabled={!isPyodideReady} style={{ backgroundColor: isPyodideReady ? '#2563eb' : '#1e293b', color: 'white', border: 'none', padding: '8px 20px', borderRadius: '8px', cursor: 'pointer', fontWeight: '600', display: 'flex', gap: '8px', alignItems: 'center', fontSize: '13px', boxShadow: isPyodideReady ? '0 4px 12px rgba(37, 99, 235, 0.3)' : 'none' }}>

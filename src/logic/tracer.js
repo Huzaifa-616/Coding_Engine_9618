@@ -19,7 +19,7 @@ class Tracer:
 
         variables = {}
         # Define a Block List of names we NEVER want to show the student
-        blocklist = ['t', 'Tracer', 'start_trace', 'stop_trace', 'code', 'sys', 'json']
+        blocklist = ['t', 'Tracer', 'start_trace', 'stop_trace', 'code', 'sys', 'json', 'types']
 
         for var_name, var_val in frame.f_locals.items():
             
