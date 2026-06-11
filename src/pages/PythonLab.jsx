@@ -1,32 +1,34 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import Editor from '@monaco-editor/react';
+import Editor, { useMonaco } from '@monaco-editor/react';
 import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import 'xterm/css/xterm.css';
-import { FilePlus, File, Trash2, Play, Eye, RotateCcw } from 'lucide-react'; // Added RotateCcw for Reset
+import localforage from 'localforage';
+import { 
+  FilePlus, File, Trash2, Play, Eye, RotateCcw, AlignLeft, CheckCircle, 
+  XCircle, Code2, TerminalSquare, ChevronRight, X, Maximize2, Minimize2, Eraser 
+} from 'lucide-react';
 import { TRACER_CODE } from '../logic/tracer';
 
-// --- CONSTANTS ---
-const STORAGE_KEY = 'python-lab-files-v1';
+const STORAGE_KEY = 'nexus-python-workspace-v1';
 const DEFAULT_FILES = [
-    { name: 'main.py', language: 'python', content: 'name = input("Enter name: ")\nprint(f"Hello {name}")\n\ntotal = 0\nfor i in range(3):\n    total = total + 10\n    x = i * 2\n    print(f"Step {i}: {total}")\n\nprint("Done!")' },
+    { name: 'main.py', language: 'python', content: 'def calculate_score(points):\n    """\n    Calculates the final score.\n    """\n    total = points * 10\n    return total\n\nname = input("Enter name: ")\nprint(f"Hello {name}")\n\nfor i in range(3):\n    print(f"Step {i}: {calculate_score(i)}")\n\nprint("Done!")' },
     { name: 'data.txt', language: 'plaintext', content: 'Score: 100' }
 ];
 
 const PythonLab = () => {
-  // --- STATE WITH AUTO-SAVE ---
+  const monaco = useMonaco();
   
-  // 1. Initialize State from LocalStorage (if it exists)
-  const [files, setFiles] = useState(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? JSON.parse(saved) : DEFAULT_FILES;
-  });
-  
+  // --- ASYNC STATE (IndexedDB via localforage) ---
+  const [files, setFiles] = useState(DEFAULT_FILES);
+  const [isLoaded, setIsLoaded] = useState(false);
   const [activeFileIndex, setActiveFileIndex] = useState(0);
   const [isPyodideReady, setIsPyodideReady] = useState(false);
+  const [syntaxStatus, setSyntaxStatus] = useState('checking'); 
   
-  // Visualizer State
+  // UI State
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [traceData, setTraceData] = useState(null);
   const [currentStep, setCurrentStep] = useState(0);
   const [isVisualizerOpen, setIsVisualizerOpen] = useState(false);
@@ -38,37 +40,48 @@ const PythonLab = () => {
   const fitAddonRef = useRef(null);
   const editorRef = useRef(null);
   const decorationsRef = useRef([]);
+  const lintTimeoutRef = useRef(null);
 
-  // --- AUTO-SAVE EFFECT ---
-  // 2. Save to LocalStorage whenever 'files' changes
+  // --- 1. LOAD STORAGE ---
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(files));
-  }, [files]);
+    localforage.getItem(STORAGE_KEY).then(savedFiles => {
+      if (savedFiles && savedFiles.length > 0) {
+        setFiles(savedFiles);
+      }
+      setIsLoaded(true);
+    }).catch(err => {
+      console.error("Storage read failed:", err);
+      setIsLoaded(true);
+    });
+  }, []);
 
-  // --- INITIALIZATION ---
+  // --- 2. SAVE STORAGE ---
   useEffect(() => {
-    // Setup Terminal
+    if (isLoaded) {
+      localforage.setItem(STORAGE_KEY, files).catch(err => console.error("Storage write failed:", err));
+    }
+  }, [files, isLoaded]);
+
+  // --- INITIALIZATION & TERMINAL ---
+  useEffect(() => {
     const term = new Terminal({
       cursorBlink: true,
-      theme: { background: '#1e1e1e', foreground: '#ffffff' },
+      theme: { background: '#0f172a', foreground: '#f8fafc', selectionBackground: '#334155', cursor: '#3b82f6' },
       fontSize: 14,
-      fontFamily: '"Cascadia Code", "Fira Mono", monospace'
+      fontFamily: '"Fira Code", "Cascadia Code", monospace',
+      padding: 10
     });
     
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     fitAddonRef.current = fitAddon;
 
-    if (terminalRef.current) {
-        term.open(terminalRef.current);
-    }
-    
+    if (terminalRef.current) term.open(terminalRef.current);
     setTimeout(() => { try { fitAddon.fit(); } catch (e) {} }, 100);
 
-    term.writeln('\x1b[33mInitializing 9618 Lab...\x1b[0m');
+    term.writeln('\x1b[38;2;59;130;246m[Nexus Engine]\x1b[0m Initializing Python 3.10 WebAssembly Core...');
     xtermRef.current = term;
 
-    // Load Pyodide
     const loadPython = async () => {
       try {
         const pyodide = await window.loadPyodide();
@@ -77,65 +90,110 @@ const PythonLab = () => {
         pyodide.setStdout({ batched: (msg) => term.writeln(msg) });
         pyodide.setStdin({
           stdin: () => {
-            const result = prompt("Input required:");
-            term.writeln(result);
+            const result = prompt("Nexus IDE: The running script is requesting input:");
+            term.writeln(`\x1b[38;2;148;163;184m> ${result}\x1b[0m`);
             return result;
           }
         });
 
         setIsPyodideReady(true);
-        term.writeln('\x1b[32m>>> System Ready.\x1b[0m');
-        term.write('\r\n$ ');
+        setSyntaxStatus('ok');
+        term.writeln('\x1b[38;2;34;197;94m[Nexus Engine]\x1b[0m System Ready. Awaiting commands.\r\n');
+        
+        if (isLoaded) runLinter(files[activeFileIndex].content);
       } catch (err) {
-        term.writeln(`\x1b[31mError: ${err.message}\x1b[0m`);
+        term.writeln(`\x1b[31mBoot Error: ${err.message}\x1b[0m`);
+        setSyntaxStatus('error');
       }
     };
     loadPython();
 
     const handleResize = () => { try { fitAddon.fit(); } catch (e) {} };
     window.addEventListener('resize', handleResize);
-    return () => {
-      window.removeEventListener('resize', handleResize);
-      term.dispose();
-    };
-  }, []);
+    return () => { window.removeEventListener('resize', handleResize); term.dispose(); };
+  }, [isLoaded]); // Depend on isLoaded so files[activeFileIndex] is accurate
 
-  // --- HIGHLIGHTER LOGIC ---
-  useEffect(() => {
-    if (!editorRef.current || !isVisualizerOpen || !traceData) return;
+  // --- LINTING & FORMATTING ---
+  const runLinter = async (codeValue) => {
+    if (!pyodideRef.current || !monaco || !editorRef.current || codeValue.trim() === '') return;
+    const pyodide = pyodideRef.current;
+    const model = editorRef.current.getModel();
+    
+    const lintScript = `
+import ast, json
+try:
+    ast.parse(${JSON.stringify(codeValue)})
+    "OK"
+except SyntaxError as e:
+    json.dumps({"line": e.lineno, "col": e.offset, "msg": e.msg})
+    `;
 
-    const currentLine = traceData[currentStep]?.line;
+    try {
+        const res = await pyodide.runPythonAsync(lintScript);
+        if (res === "OK") {
+            monaco.editor.setModelMarkers(model, "python", []);
+            setSyntaxStatus('ok');
+        } else {
+            const err = JSON.parse(res);
+            monaco.editor.setModelMarkers(model, "python", [{
+                startLineNumber: err.line, startColumn: err.col || 1, endLineNumber: err.line, endColumn: 100,
+                message: err.msg, severity: monaco.MarkerSeverity.Error
+            }]);
+            setSyntaxStatus('error');
+        }
+    } catch(e) {}
+  };
 
-    if (currentLine) {
-       const oldDecorations = decorationsRef.current;
-       const newDecorations = editorRef.current.deltaDecorations(oldDecorations, [
-         {
-           range: new window.monaco.Range(currentLine, 1, currentLine, 1),
-           options: {
-             isWholeLine: true,
-             className: 'myLineDecoration',
-             glyphMarginClassName: 'myGlyphMarginClass'
-           }
-         }
-       ]);
-       decorationsRef.current = newDecorations;
-       editorRef.current.revealLineInCenter(currentLine);
-    }
-  }, [currentStep, isVisualizerOpen, traceData]);
+  const handleEditorChange = (value) => {
+    const updatedFiles = [...files];
+    updatedFiles[activeFileIndex].content = value;
+    setFiles(updatedFiles);
+
+    setSyntaxStatus('checking');
+    if (lintTimeoutRef.current) clearTimeout(lintTimeoutRef.current);
+    lintTimeoutRef.current = setTimeout(() => {
+        if (updatedFiles[activeFileIndex].language === 'python') runLinter(value);
+        else setSyntaxStatus('ok');
+    }, 600);
+  };
+
+  const formatCode = async () => {
+    if (!pyodideRef.current || files[activeFileIndex].language !== 'python') return;
+    const pyodide = pyodideRef.current;
+    const formatScript = `
+import ast
+try:
+    ast.unparse(ast.parse(${JSON.stringify(files[activeFileIndex].content)}))
+except:
+    "ERROR"
+    `;
+
+    try {
+        const formatted = await pyodide.runPythonAsync(formatScript);
+        if (formatted !== "ERROR") handleEditorChange(formatted);
+        else alert("Cannot format: Fix syntax errors first.");
+    } catch(e) {}
+  };
 
   const handleEditorDidMount = (editor, monaco) => {
     editorRef.current = editor;
   };
 
-  // --- FILE OPERATIONS ---
-  const handleEditorChange = (value) => {
-    const updatedFiles = [...files];
-    updatedFiles[activeFileIndex].content = value;
-    setFiles(updatedFiles);
-  };
+  // --- VISUALIZER HOOKS ---
+  useEffect(() => {
+    if (!editorRef.current || !isVisualizerOpen || !traceData) return;
+    const currentLine = traceData[currentStep]?.line;
+    if (currentLine) {
+       decorationsRef.current = editorRef.current.deltaDecorations(decorationsRef.current, [
+         { range: new window.monaco.Range(currentLine, 1, currentLine, 1), options: { isWholeLine: true, className: 'visualizer-line-highlight', glyphMarginClassName: 'visualizer-glyph' } }
+       ]);
+       editorRef.current.revealLineInCenter(currentLine);
+    }
+  }, [currentStep, isVisualizerOpen, traceData]);
 
+  // --- FILE OPERATIONS ---
   const createNewFile = () => {
-    const fileName = prompt("Enter file name:");
+    const fileName = prompt("Enter file name (e.g., script.py):");
     if (!fileName) return;
     const lang = fileName.endsWith('.py') ? 'python' : 'plaintext';
     setFiles([...files, { name: fileName, language: lang, content: '' }]);
@@ -146,32 +204,36 @@ const PythonLab = () => {
     e.stopPropagation();
     if (files.length === 1) return alert("Keep at least one file!");
     if (window.confirm(`Delete ${files[index].name}?`)) {
-      const newFiles = files.filter((_, i) => i !== index);
-      setFiles(newFiles);
+      setFiles(files.filter((_, i) => i !== index));
       setActiveFileIndex(0);
     }
   };
 
-  // 3. Reset Function
   const resetFiles = () => {
     if (window.confirm("Reset all files to default? You will lose your changes.")) {
         setFiles(DEFAULT_FILES);
         setActiveFileIndex(0);
+        setTimeout(() => runLinter(DEFAULT_FILES[0].content), 500);
     }
   };
 
-  // --- RUN LOGIC ---
+  const clearTerminal = () => {
+    if (xtermRef.current) {
+        xtermRef.current.clear();
+        xtermRef.current.writeln('\x1b[38;2;59;130;246m[Nexus Engine]\x1b[0m Terminal cleared. Ready.');
+    }
+  };
+
+  // --- EXECUTION ---
   const runCode = async () => {
     if (!pyodideRef.current) return;
     setIsVisualizerOpen(false); 
-    if (editorRef.current) {
-        decorationsRef.current = editorRef.current.deltaDecorations(decorationsRef.current, []);
-    }
+    if (editorRef.current) decorationsRef.current = editorRef.current.deltaDecorations(decorationsRef.current, []);
 
     const term = xtermRef.current;
     const pyodide = pyodideRef.current;
 
-    term.writeln('\x1b[34m--- Running ---\x1b[0m');
+    term.writeln('\r\n\x1b[44m\x1b[37m RUNNING SCRIPT \x1b[0m');
 
     try {
       files.forEach(f => pyodide.FS.writeFile(f.name, f.content));
@@ -179,22 +241,21 @@ const PythonLab = () => {
       
       if (activeFile.name.endsWith('.py')) {
          await pyodide.runPythonAsync(activeFile.content);
+         term.writeln('\x1b[38;2;34;197;94mProcess finished with exit code 0\x1b[0m');
       } else {
-         term.writeln(`\x1b[33mSwitch to a .py file to run!\x1b[0m`);
+         term.writeln(`\x1b[38;2;234;179;8mWarning: Select a .py file to execute.\x1b[0m`);
       }
     } catch (err) {
       term.writeln(`\x1b[31m${err}\x1b[0m`);
     }
-    term.write('\r\n$ ');
   };
 
-  // --- VISUALIZER LOGIC ---
   const visualizeCode = async () => {
     if (!pyodideRef.current) return;
     const term = xtermRef.current;
     const pyodide = pyodideRef.current;
     
-    term.writeln('\x1b[35m--- Generating Visualization... ---\x1b[0m');
+    term.writeln('\r\n\x1b[45m\x1b[37m GENERATING VISUALIZATION \x1b[0m');
 
     try {
       files.forEach(f => pyodide.FS.writeFile(f.name, f.content));
@@ -237,11 +298,12 @@ finally:
         if (data.length > 0) {
             setTraceData(data);
             setCurrentStep(0);
+            setIsFullscreen(false); // Force close fullscreen so they can see the visualizer
             setIsVisualizerOpen(true);
-            term.writeln(`\x1b[32m>>> Captured ${data.length} steps.\x1b[0m`);
+            term.writeln(`\x1b[38;2;34;197;94mSuccessfully captured ${data.length} execution steps.\x1b[0m`);
             setTimeout(() => { try { fitAddonRef.current.fit(); } catch(e){} }, 50);
         } else {
-            term.writeln(`\x1b[33mWarning: No steps captured.\x1b[0m`);
+            term.writeln(`\x1b[38;2;234;179;8mWarning: No steps captured.\x1b[0m`);
         }
       } else {
         term.writeln(`\x1b[31mError: Trace failed.\x1b[0m`);
@@ -254,74 +316,99 @@ finally:
 
   const currentTrace = traceData && traceData[currentStep] ? traceData[currentStep] : null;
 
+  if (!isLoaded) return <div style={{ height: '100vh', background: '#0f172a', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b' }}>Booting Workspace...</div>;
+
   return (
-    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', backgroundColor: '#1e1e1e', color: '#ccc' }}>
+    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', backgroundColor: '#0f172a', color: '#cbd5e1', fontFamily: 'Inter, system-ui, sans-serif' }}>
       
-      {/* CSS */}
       <style>{`
-        .myLineDecoration { background: rgba(144, 238, 144, 0.2); border-left: 2px solid #4CAF50; }
-        .myGlyphMarginClass { background: #4CAF50; width: 5px !important; }
+        .visualizer-line-highlight { background: rgba(139, 92, 246, 0.2); border-left: 3px solid #8b5cf6; }
+        .visualizer-glyph { background: #8b5cf6; width: 6px !important; border-radius: 3px; margin-left: 2px;}
+        .xterm .xterm-viewport::-webkit-scrollbar { width: 8px; }
+        .xterm .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
+        .xterm .xterm-viewport::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
       `}</style>
 
-      {/* NAVBAR */}
-      <div style={{ height: '50px', backgroundColor: '#2d2d2d', display: 'flex', alignItems: 'center', padding: '0 20px', justifyContent: 'space-between', borderBottom: '1px solid #444' }}>
-        <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
-            <Link to="/" style={{ textDecoration: 'none', color: '#ccc' }}>🏠</Link>
-            <span style={{ color: '#fff', fontWeight: 'bold' }}>Python Lab</span>
+      {/* --- TOP RIBBON --- */}
+      <div style={{ height: '56px', backgroundColor: '#020617', display: 'flex', alignItems: 'center', padding: '0 20px', justifyContent: 'space-between', borderBottom: '1px solid #1e293b' }}>
+        <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
+            <Link to="/" style={{ textDecoration: 'none', color: '#64748b', display: 'flex', alignItems: 'center', gap: 6, transition: 'color 0.2s' }} onMouseEnter={e=>e.currentTarget.style.color='#f8fafc'} onMouseLeave={e=>e.currentTarget.style.color='#64748b'}>
+                <Code2 size={20}/>
+            </Link>
+            <span style={{ color: '#f8fafc', fontWeight: '600', fontSize: '15px', letterSpacing: '0.02em' }}>Python IDE</span>
+            
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: '100px', backgroundColor: '#1e293b', fontSize: '11px', fontWeight: '600' }}>
+                {syntaxStatus === 'checking' && <><RotateCcw size={12} className="animate-spin" color="#94a3b8"/> Checking...</>}
+                {syntaxStatus === 'ok' && <><CheckCircle size={12} color="#22c55e"/> Syntax OK</>}
+                {syntaxStatus === 'error' && <><XCircle size={12} color="#ef4444"/> Syntax Error</>}
+            </div>
         </div>
-        <div style={{ display: 'flex', gap: '10px' }}>
-            <button onClick={runCode} disabled={!isPyodideReady} style={{ backgroundColor: isPyodideReady ? '#4CAF50' : '#555', color: 'white', border: 'none', padding: '8px 20px', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', display: 'flex', gap: '5px', alignItems: 'center' }}>
-                <Play size={16} /> RUN
+
+        <div style={{ display: 'flex', gap: '12px' }}>
+            <button onClick={formatCode} disabled={!isPyodideReady} style={{ backgroundColor: '#1e293b', color: '#f8fafc', border: '1px solid #334155', padding: '8px 16px', borderRadius: '8px', cursor: 'pointer', fontWeight: '600', display: 'flex', gap: '8px', alignItems: 'center', fontSize: '13px', transition: 'all 0.2s' }} onMouseEnter={e=>{e.currentTarget.style.borderColor='#475569'; e.currentTarget.style.background='#334155'}} onMouseLeave={e=>{e.currentTarget.style.borderColor='#334155'; e.currentTarget.style.background='#1e293b'}}>
+                <AlignLeft size={16} /> Format
             </button>
-            <button onClick={visualizeCode} disabled={!isPyodideReady} style={{ backgroundColor: isPyodideReady ? '#9C27B0' : '#555', color: 'white', border: 'none', padding: '8px 20px', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', display: 'flex', gap: '5px', alignItems: 'center' }}>
-                <Eye size={16} /> VISUALIZE
+            <button onClick={runCode} disabled={!isPyodideReady} style={{ backgroundColor: isPyodideReady ? '#2563eb' : '#1e293b', color: 'white', border: 'none', padding: '8px 20px', borderRadius: '8px', cursor: 'pointer', fontWeight: '600', display: 'flex', gap: '8px', alignItems: 'center', fontSize: '13px', boxShadow: isPyodideReady ? '0 4px 12px rgba(37, 99, 235, 0.3)' : 'none' }}>
+                <Play size={16} fill="currentColor" /> Run Code
+            </button>
+            <button onClick={visualizeCode} disabled={!isPyodideReady} style={{ backgroundColor: isPyodideReady ? '#7c3aed' : '#1e293b', color: 'white', border: 'none', padding: '8px 20px', borderRadius: '8px', cursor: 'pointer', fontWeight: '600', display: 'flex', gap: '8px', alignItems: 'center', fontSize: '13px', boxShadow: isPyodideReady ? '0 4px 12px rgba(124, 58, 237, 0.3)' : 'none' }}>
+                <Eye size={16} /> Visualize
             </button>
         </div>
       </div>
 
-      {/* MAIN LAYOUT: 3 COLUMNS */}
+      {/* --- MAIN WORKSPACE --- */}
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
         
-        {/* LEFT: SIDEBAR */}
-        <div style={{ width: '200px', backgroundColor: '#252526', borderRight: '1px solid #333', display: 'flex', flexDirection: 'column' }}>
-          <div style={{ padding: '10px', color: '#bbb', fontSize: '12px', fontWeight: 'bold', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            EXPLORER 
-            <div style={{ display: 'flex', gap: '10px'}}>
-                <RotateCcw size={14} style={{ cursor: 'pointer' }} onClick={resetFiles} title="Reset to Defaults" />
-                <FilePlus size={16} style={{ cursor: 'pointer' }} onClick={createNewFile} title="New File" />
-            </div>
-          </div>
-          {files.map((file, index) => (
-            <div 
-              key={index}
-              onClick={() => setActiveFileIndex(index)}
-              style={{ 
-                padding: '8px 15px', 
-                cursor: 'pointer', 
-                backgroundColor: activeFileIndex === index ? '#37373d' : 'transparent',
-                color: activeFileIndex === index ? '#fff' : '#aaa',
-                display: 'flex', 
-                justifyContent: 'space-between',
-                fontSize: '14px'
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><File size={14} /> {file.name}</div>
-              <Trash2 size={14} style={{ opacity: 0.5 }} onClick={(e) => deleteFile(e, index)} />
-            </div>
-          ))}
-        </div>
-
-        {/* CENTER: EDITOR + VISUALIZER */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-            <div style={{ backgroundColor: '#1e1e1e', padding: '5px 20px', color: '#fff', fontSize: '13px', borderBottom: '1px solid #333', flexShrink: 0 }}>
-                {files[activeFileIndex].name}
+        {/* SIDEBAR */}
+        {!isFullscreen && (
+          <div style={{ width: '240px', backgroundColor: '#0f172a', borderRight: '1px solid #1e293b', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ padding: '16px', color: '#64748b', fontSize: '11px', fontWeight: '700', letterSpacing: '0.05em', textTransform: 'uppercase', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              Explorer 
+              <div style={{ display: 'flex', gap: '12px'}}>
+                  <RotateCcw size={14} style={{ cursor: 'pointer' }} onClick={resetFiles} title="Reset to Defaults" />
+                  <FilePlus size={14} style={{ cursor: 'pointer' }} onClick={createNewFile} title="New File" />
+              </div>
             </div>
             
-            <div style={{ 
-                flexGrow: 1, 
-                flexBasis: isVisualizerOpen ? '50%' : '100%', 
-                minHeight: '0' 
-            }}>
+            <div style={{ padding: '0 8px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {files.map((file, index) => (
+                <div 
+                  key={index}
+                  onClick={() => { setActiveFileIndex(index); runLinter(files[index].content); }}
+                  style={{ 
+                    padding: '8px 12px', cursor: 'pointer', borderRadius: '6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px',
+                    backgroundColor: activeFileIndex === index ? '#1e293b' : 'transparent',
+                    color: activeFileIndex === index ? '#f8fafc' : '#94a3b8',
+                    fontWeight: activeFileIndex === index ? '600' : '400'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <File size={14} color={file.name.endsWith('.py') ? '#3b82f6' : '#94a3b8'}/> 
+                    {file.name}
+                  </div>
+                  {files.length > 1 && <Trash2 size={14} style={{ color: '#ef4444', opacity: activeFileIndex === index ? 1 : 0.4 }} onClick={(e) => deleteFile(e, index)} />}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* CENTER COLUMN (Editor + Terminal) */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+            
+            {/* Editor Breadcrumbs & Fullscreen Toggle */}
+            <div style={{ backgroundColor: '#0f172a', padding: '10px 20px', color: '#94a3b8', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid #1e293b' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ color: '#3b82f6' }}>src</span> <ChevronRight size={14}/> <span style={{ color: '#f8fafc' }}>{files[activeFileIndex].name}</span>
+                </div>
+                <button onClick={() => { setIsFullscreen(!isFullscreen); setTimeout(() => fitAddonRef.current?.fit(), 100); }} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', display: 'flex', alignItems: 'center' }} title="Toggle Fullscreen">
+                  {isFullscreen ? <Minimize2 size={16}/> : <Maximize2 size={16}/>}
+                </button>
+            </div>
+            
+            {/* THE MONACO EDITOR */}
+            <div style={{ flex: 1, position: 'relative' }}>
                 <Editor
                     height="100%"
                     language={files[activeFileIndex].language}
@@ -329,48 +416,72 @@ finally:
                     value={files[activeFileIndex].content}
                     onChange={handleEditorChange}
                     onMount={handleEditorDidMount}
-                    options={{ minimap: { enabled: false }, fontSize: 14 }}
+                    options={{ 
+                        minimap: { enabled: true, scale: 0.75, renderCharacters: false }, 
+                        fontSize: 15, fontFamily: "'Fira Code', 'Cascadia Code', monospace", fontLigatures: true, formatOnPaste: true, formatOnType: true, suggestOnTriggerCharacters: true, wordWrap: "on", smoothScrolling: true, cursorSmoothCaretAnimation: "on", cursorBlinking: "smooth", padding: { top: 16 }, scrollBeyondLastLine: false
+                    }}
                 />
             </div>
-            
-            {/* VISUALIZER PANEL */}
-            {isVisualizerOpen && currentTrace && (
-                <div style={{ height: '50%', flexShrink: 0, backgroundColor: '#2d2d2d', borderTop: '2px solid #9C27B0', display: 'flex', flexDirection: 'column' }}>
-                    <div style={{ padding: '10px', display: 'flex', gap: '15px', alignItems: 'center', borderBottom: '1px solid #444', backgroundColor: '#252526' }}>
-                        <span style={{ fontWeight: 'bold', color: '#E1BEE7' }}>Step {currentStep + 1} / {traceData.length}</span>
-                        <input type="range" min="0" max={traceData.length - 1} value={currentStep} onChange={(e) => setCurrentStep(parseInt(e.target.value))} style={{ flex: 1 }} />
-                        <button onClick={() => setCurrentStep(Math.max(0, currentStep - 1))} style={{cursor:'pointer'}}>Prev</button>
-                        <button onClick={() => setCurrentStep(Math.min(traceData.length - 1, currentStep + 1))} style={{cursor:'pointer'}}>Next</button>
-                        <button onClick={() => setIsVisualizerOpen(false)} style={{ color: '#ff6b6b', background: 'none', border: 'none', cursor: 'pointer'}}>✖ Close</button>
-                    </div>
 
-                    <div style={{ display: 'flex', flex: 1, padding: '10px', gap: '20px', overflow: 'auto' }}>
-                        <div style={{ minWidth: '150px' }}>
-                            <div style={{ fontSize: '12px', color: '#888' }}>CURRENT LOCATION</div>
-                            <div style={{ color: '#fff', fontWeight: 'bold' }}>Line {currentTrace.line}</div>
-                        </div>
-                        <div style={{ flex: 1 }}>
-                            <div style={{ fontSize: '12px', color: '#888', marginBottom: '5px' }}>VARIABLES</div>
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
-                                {Object.entries(currentTrace.variables).map(([key, val]) => (
-                                    <div key={key} style={{ padding: '8px', backgroundColor: '#333', borderRadius: '4px', border: '1px solid #555' }}>
-                                        <span style={{ color: '#64B5F6', fontWeight: 'bold' }}>{key}</span>
-                                        <span style={{ color: '#aaa', margin: '0 5px' }}>=</span>
-                                        <span style={{ color: '#81C784' }}>{val}</span>
-                                    </div>
-                                ))}
-                                {Object.keys(currentTrace.variables).length === 0 && <span style={{color: '#666'}}>No variables yet...</span>}
-                            </div>
-                        </div>
+            {/* THE TERMINAL PANEL */}
+            <div style={{ height: isFullscreen ? '0%' : '30%', minHeight: isFullscreen ? '0' : '200px', display: isFullscreen ? 'none' : 'flex', backgroundColor: '#020617', borderTop: '1px solid #1e293b', flexDirection: 'column' }}>
+                <div style={{ padding: '8px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #1e293b', backgroundColor: '#0f172a' }}>
+                    <div style={{ color: '#f8fafc', fontSize: '12px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '2px solid #3b82f6', paddingBottom: '8px', marginBottom: '-9px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                       <TerminalSquare size={14}/> Terminal
+                    </div>
+                    <button onClick={clearTerminal} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontSize: '11px', fontWeight: '600' }} title="Clear Terminal">
+                      <Eraser size={14}/> Clear
+                    </button>
+                </div>
+                <div style={{ flex: 1, padding: '10px 10px 10px 20px' }}>
+                    <div ref={terminalRef} style={{ width: '100%', height: '100%' }} />
+                </div>
+            </div>
+
+        </div>
+
+        {/* RIGHT COLUMN (Visualizer Panel) */}
+        {isVisualizerOpen && currentTrace && !isFullscreen && (
+            <div style={{ width: '380px', backgroundColor: '#0f172a', borderLeft: '1px solid #1e293b', display: 'flex', flexDirection: 'column', animation: 'slideInRight 0.3s ease' }}>
+                
+                <div style={{ padding: '16px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #1e293b', backgroundColor: '#020617' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#f8fafc', fontWeight: '600' }}>
+                        <Eye size={16} color="#8b5cf6"/> Memory Visualizer
+                    </div>
+                    <button onClick={() => setIsVisualizerOpen(false)} style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}><X size={18}/></button>
+                </div>
+
+                <div style={{ padding: '20px', borderBottom: '1px solid #1e293b', display: 'flex', flexDirection: 'column', gap: 16 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ color: '#8b5cf6', fontSize: '13px', fontWeight: '700' }}>STEP {currentStep + 1} OF {traceData.length}</span>
+                        <span style={{ color: '#64748b', fontSize: '13px', fontWeight: '600' }}>Line {currentTrace.line}</span>
+                    </div>
+                    
+                    <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                        <button onClick={() => setCurrentStep(Math.max(0, currentStep - 1))} style={{ padding: '6px 12px', background: '#1e293b', color: '#f8fafc', border: '1px solid #334155', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>Prev</button>
+                        <input type="range" min="0" max={traceData.length - 1} value={currentStep} onChange={(e) => setCurrentStep(parseInt(e.target.value))} style={{ flex: 1, accentColor: '#8b5cf6' }} />
+                        <button onClick={() => setCurrentStep(Math.min(traceData.length - 1, currentStep + 1))} style={{ padding: '6px 12px', background: '#1e293b', color: '#f8fafc', border: '1px solid #334155', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>Next</button>
                     </div>
                 </div>
-            )}
-        </div>
 
-        {/* RIGHT: TERMINAL */}
-        <div style={{ width: '35%', padding: '10px', backgroundColor: '#000', borderLeft: '1px solid #333' }}>
-          <div ref={terminalRef} style={{ width: '100%', height: '100%' }} />
-        </div>
+                <div style={{ flex: 1, padding: '20px', overflowY: 'auto' }}>
+                    <div style={{ fontSize: '11px', color: '#64748b', fontWeight: '700', letterSpacing: '0.05em', marginBottom: '16px' }}>LOCAL VARIABLES</div>
+                    {Object.keys(currentTrace.variables).length === 0 ? (
+                        <div style={{ padding: '16px', border: '1px dashed #334155', borderRadius: '8px', textAlign: 'center', color: '#64748b', fontSize: '13px' }}>No variables in memory.</div>
+                    ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            {Object.entries(currentTrace.variables).map(([key, val]) => (
+                                <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 16px', backgroundColor: '#1e293b', borderRadius: '8px', border: '1px solid #334155' }}>
+                                    <span style={{ color: '#38bdf8', fontFamily: 'monospace', fontSize: '14px', fontWeight: '600' }}>{key}</span>
+                                    <span style={{ color: '#4ade80', fontFamily: 'monospace', fontSize: '14px' }}>{val}</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+
+            </div>
+        )}
         
       </div>
     </div>
